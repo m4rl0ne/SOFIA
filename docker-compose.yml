@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  # Dieser Node startet den Ring (join nirgendwohin)
+  node-1:
+    build: .
+    hostname: node-1
+    environment:
+      - HOSTNAME=node-1
+    ports:
+      - "5001:5000"
+
+  # Dieser Node joint node-1
+  node-2:
+    build: .
+    hostname: node-2
+    environment:
+      - HOSTNAME=node-2
+      - BOOTSTRAP_HOST=node-1
+    ports:
+      - "5002:5000"
+    depends_on:
+      - node-1
+
+  # Dieser Node joint auch node-1 (findet aber via node-1 seinen echten Platz)
+  node-3:
+    build: .
+    hostname: node-3
+    environment:
+      - HOSTNAME=node-3
+      - BOOTSTRAP_HOST=node-1
+    ports:
+      - "5003:5000"
+    depends_on:
+      - node-1
+
+  # Ein vierter Node zum Testen
+  node-4:
+    build: .
+    hostname: node-4
+    environment:
+      - HOSTNAME=node-4
+      - BOOTSTRAP_HOST=node-1
+    ports:
+      - "5004:5000"
+    depends_on:
+      - node-1
