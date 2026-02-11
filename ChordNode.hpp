@@ -10,67 +10,68 @@ public:
     ChordNode(uint32_t my_ip, uint16_t my_port) {
         myself.ip = my_ip;
         myself.port = my_port;
-        // Simuliere ID-Generierung (in echt: SHA1 library)
+
+        // ID Generierung: Wir nutzen hier der Einfachheit halber den Port als Hash
+        // (In Produktion: mbedTLS SHA1 nutzen)
         std::memset(myself.id.bytes, 0, 20);
-        myself.id.bytes[19] = (uint8_t)(my_port & 0xFF); // ID basiert auf Port für Demo
+        myself.id.bytes[19] = (uint8_t)(my_port & 0xFF);
 
         successor = myself;
-        predecessor_valid = false;
+        std::memset(predecessor.id.bytes, 0, 20); // Leer initialisieren
+        has_predecessor = false;
 
-        std::cout << "[NODE] Started on Port " << my_port << " with ID ending in " << (int)myself.id.bytes[19] << std::endl;
+        std::cout << "[NODE] Init ID: " << (int)myself.id.toTinyID() << " (Port " << my_port << ")" << std::endl;
     }
 
     NodeInfo getSuccessor() const { return successor; }
+    NodeInfo getPredecessor() const { return predecessor; }
+    bool hasPredecessor() const { return has_predecessor; }
     NodeInfo getMyself() const { return myself; }
 
-    // --- LOGIK: JOIN ---
-    // Wird aufgerufen, wenn wir Antwort vom Bootstrap-Node bekommen
-    void handleJoinResponse(const NodeInfo& new_successor) {
-        successor = new_successor;
-        std::cout << "[NODE] Joined! New Successor is Port " << successor.port << std::endl;
+    // Setzt den Successor hart (z.B. nach Join Response)
+    void setSuccessor(const NodeInfo& new_suc) {
+        successor = new_suc;
+        std::cout << "[NODE] Successor updated -> " << (int)successor.id.toTinyID() << " (Port " << successor.port << ")" << std::endl;
     }
 
     // --- LOGIK: FIND SUCCESSOR ---
-    // Entscheidet: Bin ich zuständig oder wer anders?
-    // Return: Die NodeInfo, an die wir den Request weiterleiten müssen (oder das Ergebnis)
-    NodeInfo findSuccessorLogic(const Sha1ID& target_id) {
-        // Vereinfachtes Routing (Linear) für den Anfang:
-        // Wenn target zwischen mir und Successor liegt -> Successor ist zuständig.
-        // Sonst -> Anfrage an Successor weiterleiten.
-
-        (void)target_id;
-        // TODO: Hier echte Intervall-Prüfung und Finger-Table einbauen.
-        // Für PoC leiten wir einfach IMMER an den Successor weiter, es sei denn, wir sind es selbst.
-
-        if (successor.id == myself.id) {
-            return myself;
+    // Gibt entweder (true, ziel_node) zurück, wenn wir die Antwort wissen,
+    // oder (false, naechster_hop), wenn wir weiterfragen müssen.
+    NodeInfo findSuccessorNextHop(const Sha1ID& target_id) {
+        // Fall 1: ID liegt zwischen mir und Successor -> Successor ist zuständig
+        if (in_interval(target_id, myself.id, successor.id)) {
+            return successor;
         }
+        // Fall 2: Sonst leiten wir an Successor weiter (hier keine Finger Table Optimierung für PoC)
         return successor;
     }
 
     // --- LOGIK: STABILIZE ---
-    // Wird periodisch vom Main-Loop aufgerufen
-    void stabilize() {
-        // Hier würde man normalerweise "get_predecessor" an den Successor senden.
-        // Das triggert im Main-Loop ein Netzwerk-Paket.
-        // std::cout << "[NODE] Stabilizing..." << std::endl;
+    // Prüft, ob der Predecessor meines Successors besser zu mir passt
+    void handleStabilizeResponse(const NodeInfo& x) {
+        // x ist der Predecessor meines Successors.
+        // Wenn x zwischen mir und meinem Successor liegt, ist x mein neuer Successor.
+        if (in_interval(x.id, myself.id, successor.id)) {
+            std::cout << "[STABILIZE] Found better successor: " << (int)x.id.toTinyID() << std::endl;
+            successor = x;
+        }
     }
 
-    void handleNotify(const NodeInfo& potential_predecessor) {
-        // Prüfen ob der neue Predecessor näher ist (hier vereinfacht immer ja)
-        predecessor = potential_predecessor;
-        predecessor_valid = true;
-        std::cout << "[NODE] New Predecessor: Port " << predecessor.port << std::endl;
+    // --- LOGIK: NOTIFY ---
+    // Jemand behauptet, mein Predecessor zu sein
+    void handleNotify(const NodeInfo& potential_pred) {
+        if (!has_predecessor || in_interval(potential_pred.id, predecessor.id, myself.id)) {
+            predecessor = potential_pred;
+            has_predecessor = true;
+            std::cout << "[INFO] New Predecessor accepted: " << (int)predecessor.id.toTinyID() << " (Port " << predecessor.port << ")" << std::endl;
+        }
     }
 
 private:
     NodeInfo myself;
     NodeInfo successor;
     NodeInfo predecessor;
-    bool predecessor_valid;
-
-    // Finger Table (statisch reserviert)
-    std::array<NodeInfo, 160> fingers;
+    bool has_predecessor;
 };
 
 #endif

@@ -3,53 +3,71 @@
 
 #include <cstdint>
 #include <cstring>
+#include <algorithm> // für std::reverse
 
-// --- KONFIGURATION ---
 constexpr uint16_t DEFAULT_PORT = 5000;
 
-// --- ID STRUKTUR (20 Byte SHA-1) ---
 struct Sha1ID {
     uint8_t bytes[20];
 
     bool operator==(const Sha1ID& other) const {
         return std::memcmp(bytes, other.bytes, 20) == 0;
     }
-    // Für Routing wichtig:
     bool operator!=(const Sha1ID& other) const { return !(*this == other); }
+
+    // Für Log-Ausgaben (wir nutzen nur das letzte Byte zur Orientierung)
+    uint8_t toTinyID() const { return bytes[19]; }
 };
 
-// --- ADRESS INFO ---
-// IP als 32-Bit Integer (Network Byte Order)
+// Hilfsfunktion: Prüft ob id im Intervall (start, end] liegt (Ring-Topologie)
+inline bool in_interval(const Sha1ID& id, const Sha1ID& start, const Sha1ID& end) {
+    auto lessThan = [](const Sha1ID& a, const Sha1ID& b) {
+        return std::memcmp(a.bytes, b.bytes, 20) < 0;
+    };
+
+    if (start == end) return true; // Ring besteht nur aus einem Node
+
+    bool start_lt_end = lessThan(start, end);
+    bool start_lt_id = lessThan(start, id);
+    bool id_lt_end = lessThan(id, end);
+    bool id_le_end = (lessThan(id, end) || id == end);
+
+    if (start_lt_end) { // Normaler Fall: start < end
+        return start_lt_id && id_le_end;
+    } else { // Wrap-around: start > end
+        return start_lt_id || id_le_end;
+    }
+}
+
 struct NodeInfo {
     Sha1ID id;
     uint32_t ip;
     uint16_t port;
 };
 
-// --- NACHRICHTEN TYPEN ---
+// Nachrichtentypen erweitern
 enum MessageType : uint8_t {
     MSG_PING = 0x01,
     MSG_FIND_SUCCESSOR = 0x02,
     MSG_FIND_SUCCESSOR_RESPONSE = 0x03,
     MSG_NOTIFY = 0x04,
-    MSG_JOIN_REQ = 0x05
+    MSG_GET_PREDECESSOR = 0x06,
+    MSG_GET_PREDECESSOR_RESPONSE = 0x07
 };
 
-// --- PACKET HEADER ---
-// Jedes Paket beginnt damit.
-#pragma pack(push, 1) // Packing erzwingen (kein Padding)
+#pragma pack(push, 1)
 struct PacketHeader {
-    uint8_t magic;      // 0xCH (Chord) zur Erkennung
-    uint8_t type;       // MessageType
+    uint8_t magic;      // 0xCC
+    uint8_t type;
     uint32_t payload_len;
 };
 
-// Payload für FindSuccessor
+// --- HIER HAT DER FEHLENDE STRUCT GEFEHLT ---
 struct FindSuccessorPayload {
     Sha1ID target_id;
 };
+// --------------------------------------------
 
-// Payload für Antworten, die eine NodeInfo enthalten
 struct NodeInfoPayload {
     NodeInfo node;
 };
