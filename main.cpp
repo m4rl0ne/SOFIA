@@ -187,26 +187,38 @@ int main(int argc, char* argv[]) {
         }
 
         auto now = std::chrono::steady_clock::now();
-        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_stabilize).count() > 1000) {
 
-            // 1. Stabilize: Frage Successor nach SEINEM Predecessor
+        // Timer: 100ms für den Test (sonst 1000ms)
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_stabilize).count() > 100) {
+
             NodeInfo suc = node.getSuccessor();
-            // Nicht mich selbst fragen (außer ich bin allein)
-            if (suc.port != port) {
-                PacketHeader resp_hdr = {0,0,0};
+
+            if (suc.port == port) {
+                if (node.hasPredecessor()) {
+                    NodeInfo pred = node.getPredecessor();
+                    if (pred.port != port) {
+                        node.setSuccessor(pred);
+                    }
+                }
+            }
+
+            else {
+                PacketHeader resp_hdr;
                 std::vector<uint8_t> resp_data;
 
-                // RPC: GET_PREDECESSOR
                 sendRpc(suc, MSG_GET_PREDECESSOR, nullptr, 0, &resp_hdr, &resp_data);
 
                 if (resp_hdr.type == MSG_GET_PREDECESSOR_RESPONSE) {
                     NodeInfoPayload* p = (NodeInfoPayload*)resp_data.data();
+
+                    // Das hier prüft, ob der Vorgänger von 5001 (z.B. 5000.5) besser zu mir passt als 5001.
                     node.handleStabilizeResponse(p->node);
                 }
 
-                // 2. Notify: Sag dem Successor, dass ich da bin
-                NodeInfoPayload my_info; my_info.node = node.getMyself();
-                sendRpc(node.getSuccessor(), MSG_NOTIFY, &my_info, sizeof(my_info), nullptr, nullptr);
+                // B. Notify: "Hallo Successor, ich bin dein Vorgänger!"
+                NodeInfoPayload my_info;
+                my_info.node = node.getMyself();
+                sendRpc(suc, MSG_NOTIFY, &my_info, sizeof(my_info), nullptr, nullptr);
             }
 
             last_stabilize = now;
