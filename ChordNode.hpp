@@ -10,78 +10,93 @@ public:
     ChordNode(uint32_t my_ip, uint16_t my_port) {
         myself.ip = my_ip;
         myself.port = my_port;
-
-        // ID Generierung: Wir nutzen hier der Einfachheit halber den Port als Hash
-        // (In Produktion: mbedTLS SHA1 nutzen)
         std::memset(myself.id.bytes, 0, 20);
         myself.id.bytes[19] = (uint8_t)(my_port & 0xFF);
 
-        successor = myself;
-        std::memset(predecessor.id.bytes, 0, 20); // Leer initialisieren
-        has_predecessor = false;
+        // Initialisiere Liste mit mir selbst
+        for(int i=0; i<SUCLIST_SIZE; ++i) successor_list[i] = myself;
 
-        std::cout << "[NODE] Init ID: " << (int)myself.id.toTinyID() << " (Port " << my_port << ")" << std::endl;
+        predecessor_valid = false;
+        std::cout << "[NODE] Init ID: " << (int)myself.id.toTinyID() << std::endl;
     }
 
-    NodeInfo getSuccessor() const { return successor; }
+    NodeInfo getSuccessor() const { return successor_list[0]; }
     NodeInfo getPredecessor() const { return predecessor; }
-    bool hasPredecessor() const { return has_predecessor; }
+    bool hasPredecessor() const { return predecessor_valid; }
     NodeInfo getMyself() const { return myself; }
 
-    // Setzt den Successor hart (z.B. nach Join Response)
+    // --- JOIN FIX: Fülle die ganze Liste! ---
     void setSuccessor(const NodeInfo& new_suc) {
-        successor = new_suc;
-        std::cout << "[NODE] Successor updated -> " << (int)successor.id.toTinyID() << " (Port " << successor.port << ")" << std::endl;
-    }
-
-    // Gibt entweder (true, ziel_node) zurück, wenn wir die Antwort wissen,
-    // oder (false, naechster_hop), wenn wir weiterfragen müssen.
-    NodeInfo findSuccessorNextHop(const Sha1ID& target_id) {
-        // Fall 1: ID liegt zwischen mir und Successor -> Successor ist zuständig
-        if (in_interval(target_id, myself.id, successor.id)) {
-            return successor;
+        // Wir füllen die GANZE Liste mit dem neuen Successor.
+        // Warum? Wenn new_suc kurz nicht antwortet, wollen wir es nochmal probieren
+        // und nicht sofort auf "myself" (Index 1) zurückfallen.
+        for(int i=0; i<SUCLIST_SIZE; ++i) {
+            successor_list[i] = new_suc;
         }
-        // Fall 2: Sonst leiten wir an Successor weiter (hier keine Finger Table Optimierung für PoC)
-        return successor;
+        std::cout << "[UPDATE] Successor set to " << new_suc.port << " (List Reset)" << std::endl;
     }
 
-    // Prüft, ob der Predecessor meines Successors besser zu mir passt
+    // --- HEILUNG ---
+    void handleSuccessorFailure() {
+        std::cout << "[FAILOVER] Successor " << successor_list[0].port << " unreachable!" << std::endl;
+
+        // Verschieben: [Tod, S2, S3] -> [S2, S3, Ich]
+        for(int i=0; i < SUCLIST_SIZE-1; ++i) {
+            successor_list[i] = successor_list[i+1];
+        }
+        successor_list[SUCLIST_SIZE-1] = myself; // Hinten auffüllen
+
+        std::cout << "[FAILOVER] New Successor is " << successor_list[0].port << std::endl;
+    }
+
+    // Liste aktualisieren (von meinem Successor empfangen)
+    void updateSuccessorList(const NodeInfo* received_list, int count) {
+        // Meine Liste: [MeinSuccessor (fest), SeinSuccessor1, SeinSuccessor2]
+        for(int i=0; i < count && i < (SUCLIST_SIZE-1); ++i) {
+            successor_list[i+1] = received_list[i];
+        }
+    }
+
+    void getMySuccessorList(NodeInfo* out, uint8_t* out_count) {
+        *out_count = SUCLIST_SIZE;
+        for(int i=0; i<SUCLIST_SIZE; ++i) out[i] = successor_list[i];
+    }
+
     void handleStabilizeResponse(const NodeInfo& x) {
-        // x ist der Predecessor meines Successors.
-        // Wenn x zwischen mir und meinem Successor liegt, ist x mein neuer Successor.
-        if (in_interval(x.id, myself.id, successor.id)) {
-            std::cout << "[STABILIZE] Found better successor: " << (int)x.id.toTinyID() << std::endl;
-            successor = x;
+        if (in_interval(x.id, myself.id, successor_list[0].id)) {
+             // Hier nur Index 0 updaten, der Rest kommt über updateSuccessorList
+             successor_list[0] = x;
         }
     }
 
-    // Jemand behauptet, mein Predecessor zu sein
     void handleNotify(const NodeInfo& potential_pred) {
-        if (!has_predecessor || in_interval(potential_pred.id, predecessor.id, myself.id)) {
+        if (!predecessor_valid || in_interval(potential_pred.id, predecessor.id, myself.id)) {
             predecessor = potential_pred;
-            has_predecessor = true;
-            std::cout << "[INFO] New Predecessor accepted: " << (int)predecessor.id.toTinyID() << " (Port " << predecessor.port << ")" << std::endl;
+            predecessor_valid = true;
         }
     }
 
-    // Wird aufgerufen, wenn wir MSG_SET_SUCCESSOR empfangen
-    void handleSetSuccessor(const NodeInfo& new_suc) {
-        successor = new_suc;
-        std::cout << "[LEAVE-OP] My Successor was updated to Port " << successor.port << std::endl;
+    NodeInfo findSuccessorNextHop(const Sha1ID& target_id) {
+        if (in_interval(target_id, myself.id, successor_list[0].id)) {
+            return successor_list[0];
+        }
+        return successor_list[0];
     }
 
-    // Wird aufgerufen, wenn wir MSG_SET_PREDECESSOR empfangen
+    // Hilfsfunktion für Leave
+    void handleSetSuccessor(const NodeInfo& new_suc) {
+        setSuccessor(new_suc); // Nutzt die sichere Methode (Reset List)
+    }
     void handleSetPredecessor(const NodeInfo& new_pred) {
         predecessor = new_pred;
-        has_predecessor = true;
-        std::cout << "[LEAVE-OP] My Predecessor was updated to Port " << predecessor.port << std::endl;
+        predecessor_valid = true;
     }
 
 private:
     NodeInfo myself;
-    NodeInfo successor;
     NodeInfo predecessor;
-    bool has_predecessor;
+    bool predecessor_valid;
+    std::array<NodeInfo, SUCLIST_SIZE> successor_list;
 };
 
 #endif

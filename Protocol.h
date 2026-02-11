@@ -3,39 +3,28 @@
 
 #include <cstdint>
 #include <cstring>
-#include <algorithm> // für std::reverse
+#include <algorithm>
 
 constexpr uint16_t DEFAULT_PORT = 5000;
+constexpr int SUCLIST_SIZE = 3; // WICHTIG: Definiert die Listen-Größe
 
 struct Sha1ID {
     uint8_t bytes[20];
-
-    bool operator==(const Sha1ID& other) const {
-        return std::memcmp(bytes, other.bytes, 20) == 0;
-    }
+    bool operator==(const Sha1ID& other) const { return std::memcmp(bytes, other.bytes, 20) == 0; }
     bool operator!=(const Sha1ID& other) const { return !(*this == other); }
-
     uint8_t toTinyID() const { return bytes[19]; }
 };
 
-// Hilfsfunktion: Prüft ob id im Intervall (start, end] liegt (Ring-Topologie)
 inline bool in_interval(const Sha1ID& id, const Sha1ID& start, const Sha1ID& end) {
     auto lessThan = [](const Sha1ID& a, const Sha1ID& b) {
         return std::memcmp(a.bytes, b.bytes, 20) < 0;
     };
-
-    if (start == end) return true; // Ring besteht nur aus einem Node
-
+    if (start == end) return true;
     bool start_lt_end = lessThan(start, end);
     bool start_lt_id = lessThan(start, id);
-    bool id_lt_end = lessThan(id, end);
     bool id_le_end = (lessThan(id, end) || id == end);
-
-    if (start_lt_end) { // Normaler Fall: start < end
-        return start_lt_id && id_le_end;
-    } else { // Wrap-around: start > end
-        return start_lt_id || id_le_end;
-    }
+    if (start_lt_end) return start_lt_id && id_le_end;
+    else return start_lt_id || id_le_end;
 }
 
 struct NodeInfo {
@@ -52,22 +41,25 @@ enum MessageType : uint8_t {
     MSG_GET_PREDECESSOR = 0x06,
     MSG_GET_PREDECESSOR_RESPONSE = 0x07,
     MSG_SET_SUCCESSOR = 0x08,
-    MSG_SET_PREDECESSOR = 0x09
+    MSG_SET_PREDECESSOR = 0x09,
+    MSG_GET_SUCLIST = 0x0A,
+    MSG_GET_SUCLIST_RESPONSE = 0x0B
 };
 
 #pragma pack(push, 1)
 struct PacketHeader {
-    uint8_t magic;      // 0xCC
+    uint8_t magic;
     uint8_t type;
     uint32_t payload_len;
 };
 
-struct FindSuccessorPayload {
-    Sha1ID target_id;
-};
+struct FindSuccessorPayload { Sha1ID target_id; };
+struct NodeInfoPayload { NodeInfo node; };
 
-struct NodeInfoPayload {
-    NodeInfo node;
+// Payload für die Liste
+struct NodeListPayload {
+    uint8_t count;
+    NodeInfo nodes[SUCLIST_SIZE];
 };
 #pragma pack(pop)
 
