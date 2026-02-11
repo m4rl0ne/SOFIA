@@ -22,11 +22,9 @@
 #include "Protocol.h"
 #include "ChordNode.hpp"
 
-// Globale Flag für Shutdown
 std::atomic<bool> g_running(true);
 void signalHandler(int) { g_running = false; }
 
-// Helper: Paket senden
 void sendPacket(SOCKET sock, uint8_t type, const void* payload, uint32_t len) {
     PacketHeader hdr;
     hdr.magic = 0xCC;
@@ -36,7 +34,6 @@ void sendPacket(SOCKET sock, uint8_t type, const void* payload, uint32_t len) {
     if (len > 0) send(sock, (const char*)payload, len, 0);
 }
 
-// Helper: RPC senden (mit konfigurierbarem Timeout)
 bool sendRpc(NodeInfo target, uint8_t type, const void* payload, uint32_t len, PacketHeader* out_hdr, std::vector<uint8_t>* out_data, int timeout_ms = 200) {
     SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
 
@@ -118,10 +115,7 @@ int main(int argc, char* argv[]) {
     fcntl(server_fd, F_SETFL, O_NONBLOCK);
 #endif
 
-    // Initialisierung der Timer
     auto last_stabilize = std::chrono::steady_clock::now();
-
-    // FIX 1: Timer in die Vergangenheit setzen, damit er SOFORT feuert
     auto last_join_attempt = std::chrono::steady_clock::now() - std::chrono::seconds(10);
 
     std::cout << "[SYSTEM] Node " << port << " started. Bootstrap: " << bootstrap_port << std::endl;
@@ -148,7 +142,6 @@ int main(int argc, char* argv[]) {
                         }
                     }
 
-                    // Dispatcher
                     if (hdr.type == MSG_FIND_SUCCESSOR) {
                         FindSuccessorPayload* req = (FindSuccessorPayload*)buf.data();
                         NodeInfo next = node.findSuccessorNextHop(req->target_id);
@@ -189,11 +182,9 @@ int main(int argc, char* argv[]) {
 
         auto now = std::chrono::steady_clock::now();
 
-        // --- 2. JOIN LOGIC (Unabhängig von Stabilize) ---
-        // Wenn ich allein bin UND einen Bootstrap-Port habe
+        // --- 2. JOIN LOGIC ---
         if (node.getSuccessor().port == port && bootstrap_port != 0) {
 
-            // Retry alle 2 Sekunden (falls Bootstrap-Node noch nicht oben ist)
             if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_join_attempt).count() > 2000) {
 
                 NodeInfo target; target.ip = my_ip; target.port = bootstrap_port;
@@ -201,7 +192,6 @@ int main(int argc, char* argv[]) {
 
                 PacketHeader resp_hdr; std::vector<uint8_t> resp_data;
 
-                // FIX 2: Timeout für Join auf 1000ms erhöht (Boot-Phase ist langsam)
                 if (sendRpc(target, MSG_FIND_SUCCESSOR, &req, sizeof(req), &resp_hdr, &resp_data, 1000)) {
                     if (resp_hdr.type == MSG_FIND_SUCCESSOR_RESPONSE) {
                         NodeInfoPayload* payload = (NodeInfoPayload*)resp_data.data();
@@ -209,31 +199,24 @@ int main(int argc, char* argv[]) {
                         std::cout << "[JOIN] Joined ring via " << bootstrap_port << std::endl;
                     }
                 }
-                // else { std::cout << "[JOIN] Failed to reach bootstrap node..." << std::endl; }
 
                 last_join_attempt = now;
             }
         }
 
         // --- 3. STABILIZE LOGIC ---
-        // FIX 3: Kein 'else' mehr. Stabilize läuft parallel zum Join-Check.
         if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_stabilize).count() > 200) {
 
             NodeInfo suc = node.getSuccessor();
 
-            // Fall: Ich bin Node 5000 und 5001 hat sich bei mir gemeldet
             if (suc.port == port) {
                  if (node.hasPredecessor() && node.getPredecessor().port != port) {
                      node.setSuccessor(node.getPredecessor());
                  }
-            }
-            // Fall: Ich bin schon im Ring
-            else {
+            } else {
                 PacketHeader resp_hdr; std::vector<uint8_t> resp_data;
 
-                // Get Predecessor
                 if (!sendRpc(suc, MSG_GET_PREDECESSOR, nullptr, 0, &resp_hdr, &resp_data, 200)) {
-                    // Timeout -> Heilung
                     node.handleSuccessorFailure();
                 } else {
                     if (resp_hdr.type == MSG_GET_PREDECESSOR_RESPONSE) {
@@ -241,14 +224,12 @@ int main(int argc, char* argv[]) {
                         node.handleStabilizeResponse(p->node);
                     }
 
-                    // Get Successor List
                     resp_data.clear();
                     if (sendRpc(suc, MSG_GET_SUCLIST, nullptr, 0, &resp_hdr, &resp_data, 200)) {
                          NodeListPayload* lp = (NodeListPayload*)resp_data.data();
                          node.updateSuccessorList(lp->nodes, lp->count);
                     }
 
-                    // Notify
                     NodeInfoPayload my_info; my_info.node = node.getMyself();
                     sendRpc(suc, MSG_NOTIFY, &my_info, sizeof(my_info), nullptr, nullptr, 200);
                 }

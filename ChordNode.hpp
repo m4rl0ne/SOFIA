@@ -13,7 +13,6 @@ public:
         std::memset(myself.id.bytes, 0, 20);
         myself.id.bytes[19] = (uint8_t)(my_port & 0xFF);
 
-        // Initialisiere Liste mit mir selbst
         for(int i=0; i<SUCLIST_SIZE; ++i) successor_list[i] = myself;
 
         predecessor_valid = false;
@@ -25,33 +24,25 @@ public:
     bool hasPredecessor() const { return predecessor_valid; }
     NodeInfo getMyself() const { return myself; }
 
-    // --- JOIN FIX: Fülle die ganze Liste! ---
     void setSuccessor(const NodeInfo& new_suc) {
-        // Wir füllen die GANZE Liste mit dem neuen Successor.
-        // Warum? Wenn new_suc kurz nicht antwortet, wollen wir es nochmal probieren
-        // und nicht sofort auf "myself" (Index 1) zurückfallen.
         for(int i=0; i<SUCLIST_SIZE; ++i) {
             successor_list[i] = new_suc;
         }
         std::cout << "[UPDATE] Successor set to " << new_suc.port << " (List Reset)" << std::endl;
     }
 
-    // --- HEILUNG ---
     void handleSuccessorFailure() {
         std::cout << "[FAILOVER] Successor " << successor_list[0].port << " unreachable!" << std::endl;
 
-        // Verschieben: [Tod, S2, S3] -> [S2, S3, Ich]
         for(int i=0; i < SUCLIST_SIZE-1; ++i) {
             successor_list[i] = successor_list[i+1];
         }
-        successor_list[SUCLIST_SIZE-1] = myself; // Hinten auffüllen
+        successor_list[SUCLIST_SIZE-1] = myself;
 
         std::cout << "[FAILOVER] New Successor is " << successor_list[0].port << std::endl;
     }
 
-    // Liste aktualisieren (von meinem Successor empfangen)
     void updateSuccessorList(const NodeInfo* received_list, int count) {
-        // Meine Liste: [MeinSuccessor (fest), SeinSuccessor1, SeinSuccessor2]
         for(int i=0; i < count && i < (SUCLIST_SIZE-1); ++i) {
             successor_list[i+1] = received_list[i];
         }
@@ -64,7 +55,6 @@ public:
 
     void handleStabilizeResponse(const NodeInfo& x) {
         if (in_interval(x.id, myself.id, successor_list[0].id)) {
-             // Hier nur Index 0 updaten, der Rest kommt über updateSuccessorList
              successor_list[0] = x;
         }
     }
@@ -83,9 +73,8 @@ public:
         return successor_list[0];
     }
 
-    // Hilfsfunktion für Leave
     void handleSetSuccessor(const NodeInfo& new_suc) {
-        setSuccessor(new_suc); // Nutzt die sichere Methode (Reset List)
+        setSuccessor(new_suc);
     }
     void handleSetPredecessor(const NodeInfo& new_pred) {
         predecessor = new_pred;

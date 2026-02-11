@@ -6,7 +6,7 @@
 #include <algorithm>
 
 constexpr uint16_t DEFAULT_PORT = 5000;
-constexpr int SUCLIST_SIZE = 3; // WICHTIG: Definiert die Listen-Größe
+constexpr int SUCLIST_SIZE = 3;
 
 struct Sha1ID {
     uint8_t bytes[20];
@@ -56,7 +56,6 @@ struct PacketHeader {
 struct FindSuccessorPayload { Sha1ID target_id; };
 struct NodeInfoPayload { NodeInfo node; };
 
-// Payload für die Liste
 struct NodeListPayload {
     uint8_t count;
     NodeInfo nodes[SUCLIST_SIZE];
