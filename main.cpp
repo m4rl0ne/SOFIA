@@ -175,6 +175,11 @@ int main(int argc, char* argv[]) {
                         NodeInfoPayload* p = (NodeInfoPayload*)buf.data();
                         node.handleSetPredecessor(p->node);
                     }
+                    else if (hdr.type == MSG_PING) {
+                        PacketHeader resp = hdr;
+                        resp.payload_len = 0;
+                        send(client, (char*)&resp, sizeof(resp), 0);
+                    }
                 }
                 closesocket(client);
             }
@@ -207,6 +212,15 @@ int main(int argc, char* argv[]) {
         // --- 3. STABILIZE LOGIC ---
         if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_stabilize).count() > 200) {
 
+            if (node.hasPredecessor()) {
+                NodeInfo pred = node.getPredecessor();
+                PacketHeader ping_resp;
+                if (!sendRpc(pred, MSG_PING, nullptr, 0, &ping_resp, nullptr, 100)) {
+                    std::cout << "[CLEANUP] Predecessor " << pred.port << " is dead. Clearing." << std::endl;
+                    node.invalidatePredecessor();
+                }
+            }
+
             NodeInfo suc = node.getSuccessor();
 
             if (suc.port == port) {
@@ -234,6 +248,16 @@ int main(int argc, char* argv[]) {
                     sendRpc(suc, MSG_NOTIFY, &my_info, sizeof(my_info), nullptr, nullptr, 200);
                 }
             }
+
+            if (node.hasPredecessor()) {
+                NodeInfo pred = node.getPredecessor();
+                PacketHeader ping_hdr;
+                if (!sendRpc(pred, MSG_PING, nullptr, 0, &ping_hdr, nullptr, 100)) {
+                    node.invalidatePredecessor();
+                    std::cout << "[CLEANUP] Predecessor " << pred.port << " died, clearing field." << std::endl;
+                }
+            }
+
             last_stabilize = now;
         }
     }

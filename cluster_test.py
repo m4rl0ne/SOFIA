@@ -118,9 +118,9 @@ def test_scenario():
 
     active = print_topology()
     if active == NUM_NODES:
-        print("✅ Initialer Ring ist vollständig.")
+        print("Initialer Ring ist vollständig.")
     else:
-        print(f"❌ Warnung: Nur {active}/{NUM_NODES} erreichbar.")
+        print(f"Warnung: Nur {active}/{NUM_NODES} erreichbar.")
 
     kill_idx = 5
     kill_port = START_PORT + kill_idx
@@ -143,11 +143,17 @@ def test_scenario():
     if res:
         print(f"Antwort: Port {res['port']} (ID {res['id']})")
         if res['port'] != kill_port:
-            print("✅ SUCCESS: Ring hat das Ziel umgeleitet (nicht mehr der tote Node).")
+            print("SUCCESS: Ring hat das Ziel umgeleitet (nicht mehr der tote Node).")
         else:
-            print("❌ FAIL: Zeigt immer noch auf den toten Node.")
+            print("FAIL: Zeigt immer noch auf den toten Node.")
     else:
-        print("❌ FAIL: Keine Antwort.")
+        print("FAIL: Keine Antwort.")
+
+    print("Warte 15 Sekunden für Updates.")
+    time.sleep(30)
+    print_topology()
+
+
 
 if __name__ == "__main__":
     try:

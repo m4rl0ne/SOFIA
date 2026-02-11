@@ -31,6 +31,13 @@ public:
         std::cout << "[UPDATE] Successor set to " << new_suc.port << " (List Reset)" << std::endl;
     }
 
+    void invalidatePredecessor() {
+        predecessor_valid = false;
+        // Optional: ID auf 0 setzen zur Sicherheit
+        std::memset(predecessor.id.bytes, 0, 20);
+        predecessor.port = 0;
+    }
+
     void handleSuccessorFailure() {
         std::cout << "[FAILOVER] Successor " << successor_list[0].port << " unreachable!" << std::endl;
 
@@ -40,11 +47,22 @@ public:
         successor_list[SUCLIST_SIZE-1] = myself;
 
         std::cout << "[FAILOVER] New Successor is " << successor_list[0].port << std::endl;
+
+        invalidatePredecessor();
     }
 
     void updateSuccessorList(const NodeInfo* received_list, int count) {
+        bool changed = false;
+
         for(int i=0; i < count && i < (SUCLIST_SIZE-1); ++i) {
-            successor_list[i+1] = received_list[i];
+            if (successor_list[i+1].port != received_list[i].port) {
+                successor_list[i+1] = received_list[i];
+                changed = true;
+            }
+        }
+
+        if (changed) {
+            // std::cout << "[INFO] Backup-List updated." << std::endl;
         }
     }
 
@@ -55,7 +73,11 @@ public:
 
     void handleStabilizeResponse(const NodeInfo& x) {
         if (in_interval(x.id, myself.id, successor_list[0].id)) {
-             successor_list[0] = x;
+
+            if (x.port == successor_list[0].port) return;
+
+            std::cout << "[STABILIZE] Found closer successor: " << x.port << std::endl;
+            successor_list[0] = x;
         }
     }
 
