@@ -2,6 +2,8 @@
 #include <thread>
 #include <chrono>
 #include <vector>
+#include <csignal>
+#include <atomic>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -20,6 +22,14 @@
 #include "Protocol.h"
 #include "ChordNode.hpp"
 
+std::atomic<bool> g_running(true);
+
+// Signal Handler (fängt Ctrl+C ab)
+void signalHandler(int signum) {
+    std::cout << "\n[SYSTEM] Interrupt signal (" << signum << ") received. Stopping..." << std::endl;
+    g_running = false; // Schleife beenden
+}
+
 // Hilfsfunktion: Ein Paket senden
 void sendPacket(SOCKET sock, uint8_t type, const void* payload, uint32_t len) {
     PacketHeader hdr;
@@ -31,7 +41,6 @@ void sendPacket(SOCKET sock, uint8_t type, const void* payload, uint32_t len) {
 }
 
 // Hilfsfunktion: Kurzzeit-Verbindung zu anderem Node (RPC-Style)
-// Dies simuliert, was auf der SPS im Hintergrund passieren würde
 void sendRpc(NodeInfo target, uint8_t type, const void* payload, uint32_t len, PacketHeader* out_hdr, std::vector<uint8_t>* out_data) {
     SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in addr;
@@ -56,6 +65,8 @@ void sendRpc(NodeInfo target, uint8_t type, const void* payload, uint32_t len, P
 
 int main(int argc, char* argv[]) {
     // --- SETUP ---
+    signal(SIGINT, signalHandler);
+
     uint16_t port = DEFAULT_PORT;
     uint16_t bootstrap_port = 0;
     if (argc > 1) port = std::atoi(argv[1]);
@@ -94,7 +105,6 @@ int main(int argc, char* argv[]) {
     if (bootstrap_port != 0) {
         std::cout << "[INIT] Bootstrapping via Port " << bootstrap_port << "..." << std::endl;
 
-        // 1. Wir fragen den Bootstrap-Node: "Wer ist Successor für MEINE ID?"
         NodeInfo target; target.ip = my_ip; target.port = bootstrap_port;
         FindSuccessorPayload req; req.target_id = node.getMyself().id;
 
@@ -113,49 +123,69 @@ int main(int argc, char* argv[]) {
     // --- MAIN LOOP ---
     auto last_stabilize = std::chrono::steady_clock::now();
 
-    while (true) {
-        // A. Eingehende Verbindungen bearbeiten
-        sockaddr_in client_addr;
-        socklen_t client_len = sizeof(client_addr);
-        SOCKET client_sock = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
+    std::cout << "[SYSTEM] Node running. Press Ctrl+C to leave gracefully." << std::endl;
 
-        if (client_sock != INVALID_SOCKET) {
-            PacketHeader hdr;
-            if (recv(client_sock, (char*)&hdr, sizeof(hdr), 0) == sizeof(hdr)) {
+    while (g_running) {
+        // Damit wir g_running regelmäßig prüfen können, auch wenn kein Paket kommt
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(server_fd, &readfds);
 
-                std::vector<uint8_t> buf(hdr.payload_len);
-                if (hdr.payload_len > 0) recv(client_sock, (char*)buf.data(), hdr.payload_len, 0);
+        timeval tv;
+        tv.tv_sec = 0;
+        tv.tv_usec = 100000; // 100ms Timeout
 
-                // --- MESSAGE HANDLER ---
-                if (hdr.type == MSG_FIND_SUCCESSOR) {
-                    FindSuccessorPayload* req = (FindSuccessorPayload*)buf.data();
-                    // Logik fragen: Wer ist zuständig?
-                    NodeInfo next_hop = node.findSuccessorNextHop(req->target_id);
+        int activity = select(server_fd + 1, &readfds, NULL, NULL, &tv);
 
-                    // Antwort senden
-                    NodeInfoPayload resp; resp.node = next_hop;
-                    sendPacket(client_sock, MSG_FIND_SUCCESSOR_RESPONSE, &resp, sizeof(resp));
-                }
-                else if (hdr.type == MSG_GET_PREDECESSOR) {
-                    // Jemand fragt nach meinem Predecessor (für Stabilize)
-                    NodeInfoPayload resp;
-                    if (node.hasPredecessor()) {
-                        resp.node = node.getPredecessor();
-                        sendPacket(client_sock, MSG_GET_PREDECESSOR_RESPONSE, &resp, sizeof(resp));
-                    } else {
-                        // Sende leeres Paket oder Magic Error, hier einfach Socket zu -> Client merkt es
+        if (activity > 0 && FD_ISSET(server_fd, &readfds)) {
+            sockaddr_in client_addr;
+            socklen_t client_len = sizeof(client_addr);
+            SOCKET client_sock = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
+
+            if (client_sock != INVALID_SOCKET) {
+                PacketHeader hdr;
+                int n = recv(client_sock, (char*)&hdr, sizeof(hdr), 0);
+
+                if (n == sizeof(PacketHeader)) {
+                    std::vector<uint8_t> buf(hdr.payload_len);
+                    if (hdr.payload_len > 0) recv(client_sock, (char*)buf.data(), hdr.payload_len, 0);
+
+                    // --- MESSAGE DISPATCHER ---
+                    if (hdr.type == MSG_FIND_SUCCESSOR) {
+                        FindSuccessorPayload* req = (FindSuccessorPayload*)buf.data();
+                        NodeInfo next_hop = node.findSuccessorNextHop(req->target_id);
+                        NodeInfoPayload resp; resp.node = next_hop;
+                        sendPacket(client_sock, MSG_FIND_SUCCESSOR_RESPONSE, &resp, sizeof(resp));
+                    }
+                    else if (hdr.type == MSG_GET_PREDECESSOR) {
+                        NodeInfoPayload resp;
+                        if (node.hasPredecessor()) {
+                            resp.node = node.getPredecessor();
+                            sendPacket(client_sock, MSG_GET_PREDECESSOR_RESPONSE, &resp, sizeof(resp));
+                        } else {
+                            // Sende leeres Paket (Header only) als "Kein Predecessor"
+                            PacketHeader err_hdr = hdr;
+                            err_hdr.payload_len = 0;
+                            send(client_sock, (char*)&err_hdr, sizeof(err_hdr), 0);
+                        }
+                    }
+                    else if (hdr.type == MSG_NOTIFY) {
+                        NodeInfoPayload* p = (NodeInfoPayload*)buf.data();
+                        node.handleNotify(p->node);
+                    }
+                    else if (hdr.type == MSG_SET_SUCCESSOR) {
+                        NodeInfoPayload* p = (NodeInfoPayload*)buf.data();
+                        node.handleSetSuccessor(p->node);
+                    }
+                    else if (hdr.type == MSG_SET_PREDECESSOR) {
+                        NodeInfoPayload* p = (NodeInfoPayload*)buf.data();
+                        node.handleSetPredecessor(p->node);
                     }
                 }
-                else if (hdr.type == MSG_NOTIFY) {
-                    // Jemand sagt er ist mein Predecessor
-                    NodeInfoPayload* p = (NodeInfoPayload*)buf.data();
-                    node.handleNotify(p->node);
-                }
+                closesocket(client_sock);
             }
-            closesocket(client_sock);
         }
 
-        // B. Periodische Tasks (Stabilize) - z.B. alle 1 Sekunde
         auto now = std::chrono::steady_clock::now();
         if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_stabilize).count() > 1000) {
 
@@ -185,6 +215,35 @@ int main(int argc, char* argv[]) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
+    // --- GRACEFUL LEAVE PROTOKOLL ---
+    std::cout << "\n[LEAVE] Starting graceful leave protocol..." << std::endl;
+
+    NodeInfo S = node.getSuccessor();
+    NodeInfo P = node.getPredecessor();
+    bool hasP = node.hasPredecessor();
+
+    if (hasP && P.port != node.getMyself().port) {
+        std::cout << "[LEAVE] Telling Predecessor (Port " << P.port << ") -> New Successor is " << S.port << std::endl;
+        NodeInfoPayload payload;
+        payload.node = S;
+        sendRpc(P, MSG_SET_SUCCESSOR, &payload, sizeof(payload), nullptr, nullptr);
+    }
+
+    if (S.port != node.getMyself().port && hasP) {
+        std::cout << "[LEAVE] Telling Successor (Port " << S.port << ") -> New Predecessor is " << P.port << std::endl;
+        NodeInfoPayload payload;
+        payload.node = P;
+        sendRpc(S, MSG_SET_PREDECESSOR, &payload, sizeof(payload), nullptr, nullptr);
+    }
+    else if (!hasP) {
+        std::cout << "[LEAVE] I have no predecessor. Not updating Successor's predecessor." << std::endl;
+    }
+
+    std::cout << "[LEAVE] Bye bye!" << std::endl;
     closesocket(server_fd);
+
+#ifdef _WIN32
+    WSACleanup();
+#endif
     return 0;
 }

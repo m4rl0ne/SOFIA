@@ -34,7 +34,6 @@ public:
         std::cout << "[NODE] Successor updated -> " << (int)successor.id.toTinyID() << " (Port " << successor.port << ")" << std::endl;
     }
 
-    // --- LOGIK: FIND SUCCESSOR ---
     // Gibt entweder (true, ziel_node) zurück, wenn wir die Antwort wissen,
     // oder (false, naechster_hop), wenn wir weiterfragen müssen.
     NodeInfo findSuccessorNextHop(const Sha1ID& target_id) {
@@ -46,7 +45,6 @@ public:
         return successor;
     }
 
-    // --- LOGIK: STABILIZE ---
     // Prüft, ob der Predecessor meines Successors besser zu mir passt
     void handleStabilizeResponse(const NodeInfo& x) {
         // x ist der Predecessor meines Successors.
@@ -57,7 +55,6 @@ public:
         }
     }
 
-    // --- LOGIK: NOTIFY ---
     // Jemand behauptet, mein Predecessor zu sein
     void handleNotify(const NodeInfo& potential_pred) {
         if (!has_predecessor || in_interval(potential_pred.id, predecessor.id, myself.id)) {
@@ -65,6 +62,19 @@ public:
             has_predecessor = true;
             std::cout << "[INFO] New Predecessor accepted: " << (int)predecessor.id.toTinyID() << " (Port " << predecessor.port << ")" << std::endl;
         }
+    }
+
+    // Wird aufgerufen, wenn wir MSG_SET_SUCCESSOR empfangen
+    void handleSetSuccessor(const NodeInfo& new_suc) {
+        successor = new_suc;
+        std::cout << "[LEAVE-OP] My Successor was updated to Port " << successor.port << std::endl;
+    }
+
+    // Wird aufgerufen, wenn wir MSG_SET_PREDECESSOR empfangen
+    void handleSetPredecessor(const NodeInfo& new_pred) {
+        predecessor = new_pred;
+        has_predecessor = true;
+        std::cout << "[LEAVE-OP] My Predecessor was updated to Port " << predecessor.port << std::endl;
     }
 
 private:

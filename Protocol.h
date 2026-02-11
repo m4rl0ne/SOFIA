@@ -15,7 +15,6 @@ struct Sha1ID {
     }
     bool operator!=(const Sha1ID& other) const { return !(*this == other); }
 
-    // Für Log-Ausgaben (wir nutzen nur das letzte Byte zur Orientierung)
     uint8_t toTinyID() const { return bytes[19]; }
 };
 
@@ -45,14 +44,15 @@ struct NodeInfo {
     uint16_t port;
 };
 
-// Nachrichtentypen erweitern
 enum MessageType : uint8_t {
     MSG_PING = 0x01,
     MSG_FIND_SUCCESSOR = 0x02,
     MSG_FIND_SUCCESSOR_RESPONSE = 0x03,
     MSG_NOTIFY = 0x04,
     MSG_GET_PREDECESSOR = 0x06,
-    MSG_GET_PREDECESSOR_RESPONSE = 0x07
+    MSG_GET_PREDECESSOR_RESPONSE = 0x07,
+    MSG_SET_SUCCESSOR = 0x08,
+    MSG_SET_PREDECESSOR = 0x09
 };
 
 #pragma pack(push, 1)
@@ -62,11 +62,9 @@ struct PacketHeader {
     uint32_t payload_len;
 };
 
-// --- HIER HAT DER FEHLENDE STRUCT GEFEHLT ---
 struct FindSuccessorPayload {
     Sha1ID target_id;
 };
-// --------------------------------------------
 
 struct NodeInfoPayload {
     NodeInfo node;
