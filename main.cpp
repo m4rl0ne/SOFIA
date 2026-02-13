@@ -34,10 +34,15 @@ void sendPacket(SOCKET sock, uint8_t type, const void* payload, uint32_t len) {
     if (len > 0) send(sock, (const char*)payload, len, 0);
 }
 
-bool sendRpc(NodeInfo target, uint8_t type, const void* payload, uint32_t len, PacketHeader* out_hdr, std::vector<uint8_t>* out_data, int timeout_ms = 200) {
-    SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
+bool sendRpc(NodeInfo target, uint8_t type, const void* payload, uint32_t len, PacketHeader* out_hdr, uint8_t* out_buffer, uint32_t max_buffer_len, uint16_t timeout_ms = 200) {
 
-    // Timeout Configuration
+    if (out_buffer && max_buffer_len > 0) {
+        std::memset(out_buffer, 0, max_buffer_len);
+    }
+
+    SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock == INVALID_SOCKET) return false;
+
 #ifdef _WIN32
     DWORD timeout = timeout_ms;
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
@@ -51,6 +56,7 @@ bool sendRpc(NodeInfo target, uint8_t type, const void* payload, uint32_t len, P
 #endif
 
     sockaddr_in addr;
+    std::memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = target.ip;
     addr.sin_port = htons(target.port);
@@ -60,15 +66,23 @@ bool sendRpc(NodeInfo target, uint8_t type, const void* payload, uint32_t len, P
 
         if (out_hdr) {
             int n = recv(sock, (char*)out_hdr, sizeof(PacketHeader), 0);
-            if (n != sizeof(PacketHeader)) { closesocket(sock); return false; }
+            if (n != sizeof(PacketHeader)) {
+                closesocket(sock);
+                return false;
+            }
 
-            if (out_hdr->payload_len > 0 && out_data) {
-                out_data->resize(out_hdr->payload_len);
-                int received = 0;
-                while(received < (int)out_hdr->payload_len) {
-                    int r = recv(sock, (char*)out_data->data() + received, out_hdr->payload_len - received, 0);
-                    if (r <= 0) { closesocket(sock); return false; }
+            if (out_hdr->payload_len > 0 && out_buffer) {
+                uint32_t to_read = (out_hdr->payload_len < max_buffer_len) ? out_hdr->payload_len : max_buffer_len;
+                uint32_t received = 0;
+                while (received < to_read) {
+                    int r = recv(sock, (char*)out_buffer + received, to_read - received, 0);
+                    if (r <= 0) break;
                     received += r;
+                }
+
+                if (received < to_read) {
+                    closesocket(sock);
+                    return false;
                 }
             }
         }
@@ -82,7 +96,7 @@ bool sendRpc(NodeInfo target, uint8_t type, const void* payload, uint32_t len, P
 int main(int argc, char* argv[]) {
     signal(SIGINT, signalHandler);
 #ifndef _WIN32
-    signal(SIGPIPE, SIG_IGN); // WICHTIG: Verhindert Abstürze bei toten Sockets
+    signal(SIGPIPE, SIG_IGN);
 #endif
 
     uint16_t port = DEFAULT_PORT;
@@ -109,6 +123,9 @@ int main(int argc, char* argv[]) {
     }
     listen(server_fd, 5);
 
+    uint8_t rpc_buffer[4096];
+    std::memset(rpc_buffer, 0, sizeof(rpc_buffer));
+
 #ifdef _WIN32
     u_long mode = 1; ioctlsocket(server_fd, FIONBIO, &mode);
 #else
@@ -119,6 +136,13 @@ int main(int argc, char* argv[]) {
     auto last_join_attempt = std::chrono::steady_clock::now() - std::chrono::seconds(10);
 
     std::cout << "[SYSTEM] Node " << port << " started. Bootstrap: " << bootstrap_port << std::endl;
+
+    // Add certificate for first node
+    if (bootstrap_port == 0) {
+        const char* root_secret = "TRUST-ME-I-AM-ROOT";
+        node.setCertificate((uint8_t*)root_secret, strlen(root_secret));
+        std::cout << "[SECURITY] Root-Node initialized with Master-Certificate." << std::endl;
+    }
 
     while (g_running) {
         // --- 1. NETZWERK VERARBEITUNG (Non-Blocking Accept) ---
@@ -180,6 +204,13 @@ int main(int argc, char* argv[]) {
                         resp.payload_len = 0;
                         send(client, (char*)&resp, sizeof(resp), 0);
                     }
+					else if (hdr.type == MSG_GET_CERT) {
+    					CertPayload resp;
+    					resp.cert_len = node.getCertLen();
+    					std::memcpy(resp.data, node.getCertData(), resp.cert_len);
+
+					    sendPacket(client, MSG_CERT_RESPONSE, &resp, sizeof(uint32_t) + resp.cert_len);
+					}
                 }
                 closesocket(client);
             }
@@ -194,70 +225,68 @@ int main(int argc, char* argv[]) {
 
                 NodeInfo target; target.ip = my_ip; target.port = bootstrap_port;
                 FindSuccessorPayload req; req.target_id = node.getMyself().id;
+                PacketHeader resp_hdr;
 
-                PacketHeader resp_hdr; std::vector<uint8_t> resp_data;
+                if (sendRpc(target, MSG_FIND_SUCCESSOR, &req, sizeof(req), &resp_hdr, rpc_buffer, 4096, 1000)) {
 
-                if (sendRpc(target, MSG_FIND_SUCCESSOR, &req, sizeof(req), &resp_hdr, &resp_data, 1000)) {
-                    if (resp_hdr.type == MSG_FIND_SUCCESSOR_RESPONSE) {
-                        NodeInfoPayload* payload = (NodeInfoPayload*)resp_data.data();
-                        node.setSuccessor(payload->node);
-                        std::cout << "[JOIN] Joined ring via " << bootstrap_port << std::endl;
+                    if (resp_hdr.type == MSG_FIND_SUCCESSOR_RESPONSE && resp_hdr.payload_len >= sizeof(NodeInfoPayload)) {
+
+                        NodeInfoPayload* nip = (NodeInfoPayload*)rpc_buffer;
+                        NodeInfo new_suc = nip->node;
+
+                        node.setSuccessor(new_suc);
+                        std::cout << "[JOIN] Joined ring. New successor: " << new_suc.port << std::endl;
+
+                        PacketHeader cert_hdr;
+                        if (sendRpc(new_suc, MSG_GET_CERT, nullptr, 0, &cert_hdr, rpc_buffer, 4096, 500)) {
+
+                            if (cert_hdr.type == MSG_CERT_RESPONSE && cert_hdr.payload_len >= sizeof(uint32_t)) {
+                                CertPayload* cp = (CertPayload*)rpc_buffer;
+
+                                if (cp->cert_len > 0 && cp->cert_len <= 2048) {
+                                    node.setCertificate(cp->data, cp->cert_len);
+                                    std::cout << "[SECURITY] Certificate synchronized during join." << std::endl;
+                                }
+                            }
+                        }
                     }
                 }
-
                 last_join_attempt = now;
             }
         }
 
         // --- 3. STABILIZE LOGIC ---
         if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_stabilize).count() > 200) {
-
-            if (node.hasPredecessor()) {
-                NodeInfo pred = node.getPredecessor();
-                PacketHeader ping_resp;
-                if (!sendRpc(pred, MSG_PING, nullptr, 0, &ping_resp, nullptr, 100)) {
-                    std::cout << "[CLEANUP] Predecessor " << pred.port << " is dead. Clearing." << std::endl;
-                    node.invalidatePredecessor();
-                }
-            }
-
             NodeInfo suc = node.getSuccessor();
 
             if (suc.port == port) {
-                 if (node.hasPredecessor() && node.getPredecessor().port != port) {
-                     node.setSuccessor(node.getPredecessor());
-                 }
-            } else {
-                PacketHeader resp_hdr; std::vector<uint8_t> resp_data;
+                if (node.hasPredecessor() && node.getPredecessor().port != port) {
+                    node.setSuccessor(node.getPredecessor());
+                }
+            }
+            else {
+                PacketHeader resp_hdr;
+                if (sendRpc(suc, MSG_GET_PREDECESSOR, nullptr, 0, &resp_hdr, rpc_buffer, 4096)) {
 
-                if (!sendRpc(suc, MSG_GET_PREDECESSOR, nullptr, 0, &resp_hdr, &resp_data, 200)) {
-                    node.handleSuccessorFailure();
-                } else {
-                    if (resp_hdr.type == MSG_GET_PREDECESSOR_RESPONSE) {
-                        NodeInfoPayload* p = (NodeInfoPayload*)resp_data.data();
+                    if (resp_hdr.type == MSG_GET_PREDECESSOR_RESPONSE && resp_hdr.payload_len >= sizeof(NodeInfoPayload)) {
+                        NodeInfoPayload* p = (NodeInfoPayload*)rpc_buffer;
                         node.handleStabilizeResponse(p->node);
                     }
 
-                    resp_data.clear();
-                    if (sendRpc(suc, MSG_GET_SUCLIST, nullptr, 0, &resp_hdr, &resp_data, 200)) {
-                         NodeListPayload* lp = (NodeListPayload*)resp_data.data();
-                         node.updateSuccessorList(lp->nodes, lp->count);
+                    if (sendRpc(suc, MSG_GET_SUCLIST, nullptr, 0, &resp_hdr, rpc_buffer, 4096)) {
+                        if (resp_hdr.type == MSG_GET_SUCLIST_RESPONSE && resp_hdr.payload_len >= sizeof(NodeListPayload)) {
+                            NodeListPayload* lp = (NodeListPayload*)rpc_buffer;
+                            node.updateSuccessorList(lp->nodes, lp->count);
+                        }
                     }
 
-                    NodeInfoPayload my_info; my_info.node = node.getMyself();
-                    sendRpc(suc, MSG_NOTIFY, &my_info, sizeof(my_info), nullptr, nullptr, 200);
+                    NodeInfoPayload me; me.node = node.getMyself();
+                    sendRpc(suc, MSG_NOTIFY, &me, sizeof(me), nullptr, nullptr, 200);
+
+                } else {
+                    node.handleSuccessorFailure();
                 }
             }
-
-            if (node.hasPredecessor()) {
-                NodeInfo pred = node.getPredecessor();
-                PacketHeader ping_hdr;
-                if (!sendRpc(pred, MSG_PING, nullptr, 0, &ping_hdr, nullptr, 100)) {
-                    node.invalidatePredecessor();
-                    std::cout << "[CLEANUP] Predecessor " << pred.port << " died, clearing field." << std::endl;
-                }
-            }
-
             last_stabilize = now;
         }
     }

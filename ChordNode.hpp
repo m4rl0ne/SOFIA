@@ -13,9 +13,13 @@ public:
         std::memset(myself.id.bytes, 0, 20);
         myself.id.bytes[19] = (uint8_t)(my_port & 0xFF);
 
-        for(int i=0; i<SUCLIST_SIZE; ++i) successor_list[i] = myself;
+        for(int i = 0; i < SUCLIST_SIZE; ++i) {
+            successor_list[i] = myself;
+        }
 
         predecessor_valid = false;
+		my_cert_len = 0;
+		has_cert = false;
         std::cout << "[NODE] Init ID: " << (int)myself.id.toTinyID() << std::endl;
     }
 
@@ -33,7 +37,6 @@ public:
 
     void invalidatePredecessor() {
         predecessor_valid = false;
-        // Optional: ID auf 0 setzen zur Sicherheit
         std::memset(predecessor.id.bytes, 0, 20);
         predecessor.port = 0;
     }
@@ -51,6 +54,9 @@ public:
         invalidatePredecessor();
     }
 
+    /**
+    * At the moment no O(log N) implementation of the finger table.
+    */
     void updateSuccessorList(const NodeInfo* received_list, int count) {
         bool changed = false;
 
@@ -103,11 +109,25 @@ public:
         predecessor_valid = true;
     }
 
+    void setCertificate(const uint8_t* data, uint32_t len) {
+        if (len > 2048) len = 2048;
+        std::memcpy(my_cert, data, len);
+        my_cert_len = len;
+        has_cert = true;
+    }
+
+    bool needsCertificate() const { return !has_cert; }
+    const uint8_t* getCertData() const { return my_cert; }
+    uint32_t getCertLen() const { return my_cert_len; }
+
 private:
     NodeInfo myself;
     NodeInfo predecessor;
     bool predecessor_valid;
-    std::array<NodeInfo, SUCLIST_SIZE> successor_list;
+    NodeInfo successor_list[SUCLIST_SIZE];
+    uint8_t my_cert[2048];
+    uint32_t my_cert_len = 0;
+    bool has_cert = false;
 };
 
 #endif

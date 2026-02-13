@@ -2,7 +2,6 @@ import subprocess
 import time
 import socket
 import struct
-import sys
 import atexit
 import os
 
@@ -16,8 +15,11 @@ FMT_NODE_INFO = '<20s I H'
 
 MSG_FIND_SUCCESSOR = 0x02
 MSG_FIND_SUCCESSOR_RESPONSE = 0x03
+MSG_GET_CERT = 0x0C
+MSG_CERT_RESPONSE = 0x0D
 
-# Prozess Liste
+FMT_CERT_PAYLOAD = '<I 2048s'
+
 processes = []
 
 def cleanup():
@@ -67,6 +69,33 @@ def send_rpc_find_successor(target_port, search_id_byte):
         sock.close()
     except Exception as e:
         pass
+    return None
+
+def test_node_certificate(port):
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1.5)
+        sock.connect(('127.0.0.1', port))
+
+        header = struct.pack(FMT_HEADER, 0xCC, MSG_GET_CERT, 0)
+        sock.sendall(header)
+
+        resp_hdr_bytes = sock.recv(6)
+        if len(resp_hdr_bytes) < 6: return None
+        magic, msg_type, payload_len = struct.unpack(FMT_HEADER, resp_hdr_bytes)
+
+        if msg_type == MSG_CERT_RESPONSE:
+            payload = sock.recv(payload_len)
+
+            cert_len = struct.unpack('<I', payload[:4])[0]
+            cert_data = payload[4:4+cert_len]
+
+            cert_string = cert_data.decode('ascii', errors='ignore').strip('\x00')
+            return cert_string
+
+        sock.close()
+    except Exception as e:
+        return None
     return None
 
 def start_cluster():
@@ -122,6 +151,16 @@ def test_scenario():
     else:
         print(f"Warnung: Nur {active}/{NUM_NODES} erreichbar.")
 
+    print("\n[SECURITY-CHECK] Überprüfe Zertifikats-Verteilung...")
+    test_ports = [5000, 5001, 5005, 5009]
+
+    for p in test_ports:
+        cert = test_node_certificate(p)
+        if cert:
+            print(f"  Node {p}: Zertifikat erhalten: '{cert}'")
+        else:
+            print(f"  Node {p}: Kein Zertifikat (oder falsches Format)")
+
     kill_idx = 5
     kill_port = START_PORT + kill_idx
     print(f"\n[SCENARIO] TÖTE NODE auf Port {kill_port} (Simulation Absturz)...")
@@ -135,7 +174,7 @@ def test_scenario():
     print_topology()
 
     check_node = kill_port - 1
-    target_id = get_sha1_from_port(kill_port) # ID des toten Nodes
+    target_id = get_sha1_from_port(kill_port)
 
     print(f"\n[CHECK] Frage Node {check_node}, wer für ID {target_id} (Toter Node) zuständig ist...")
     res = send_rpc_find_successor(check_node, target_id)

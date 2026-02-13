@@ -43,8 +43,17 @@ enum MessageType : uint8_t {
     MSG_SET_SUCCESSOR = 0x08,
     MSG_SET_PREDECESSOR = 0x09,
     MSG_GET_SUCLIST = 0x0A,
-    MSG_GET_SUCLIST_RESPONSE = 0x0B
+    MSG_GET_SUCLIST_RESPONSE = 0x0B,
+	MSG_GET_CERT = 0x0C,
+    MSG_CERT_RESPONSE = 0x0D
 };
+
+#pragma pack(push, 1)
+struct CertPayload {
+    uint32_t cert_len;
+    uint8_t data[2048];
+};
+#pragma pack(pop)
 
 #pragma pack(push, 1)
 struct PacketHeader {
