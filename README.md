@@ -29,5 +29,5 @@ The demo is dockerized, so you can start the docker cluster with 10 nodes with a
 
 1. Clone the repository, `cd SOFIA`
 2. Run `docker compose up --build` to start the ring, observe the console output. One node should be the master node. If you want more or less nodes, just add `--scale sps=5` with the number of nodes you want.
-3. In a second terminal, run `python docker_ring_check START_IP NUM_NODES`, where `START_IP` is the IP of the first node in the docker network and `NUM_NODES` is the number of nodes you are expecting, default is 10.
+3. In a second terminal, run `python docker_ring_check.py START_IP NUM_NODES`, where `START_IP` is the IP of the first node in the docker network and `NUM_NODES` is the number of nodes you are expecting, default is 10. I.e. `python docker_ring_check.py 172.20.0.2 10`
 4. Check if all nodes point to a successor and the ring is closed.
