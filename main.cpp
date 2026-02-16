@@ -323,7 +323,12 @@ int main(int argc, char* argv[]) {
                             if (res_hdr.type == MSG_CERT_RESPONSE) {
                                 CertPayload* cp = (CertPayload*)rpc_buffer;
                                 node.setCertificate(cp->data, cp->cert_len);
-                                std::cout << "[SECURITY] Certificate received." << std::endl;
+
+                                if(cp->cert_len > 0) {
+                                    std::cout << "[SECURITY] Valid certificate received." << std::endl;
+                                } else {
+                                    std::cout << "[SECURITY] Warning! Empty certificate received!" << std::endl;
+                                }
                             }
                         }
                     }
