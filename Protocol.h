@@ -13,6 +13,10 @@ struct Sha1ID {
     bool operator==(const Sha1ID& other) const { return std::memcmp(bytes, other.bytes, 20) == 0; }
     bool operator!=(const Sha1ID& other) const { return !(*this == other); }
     uint8_t toTinyID() const { return bytes[19]; }
+    friend std::ostream& operator<<(std::ostream& os, const Sha1ID& id) {
+        os << (int)id.toTinyID();
+        return os;
+    }
 };
 
 inline bool in_interval(const Sha1ID& id, const Sha1ID& start, const Sha1ID& end) {
