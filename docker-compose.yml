@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  sps:
+    build: .
+    entrypoint: /bin/bash -c "sleep $$(($$RANDOM % 10)) && ./build/chord_node"
+    deploy:
+      replicas: 10
+    networks:
+      chord-net:
+
+networks:
+  chord-net:
+    driver: bridge

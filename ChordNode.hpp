@@ -10,8 +10,9 @@ public:
     ChordNode(uint32_t my_ip, uint16_t my_port) {
         myself.ip = my_ip;
         myself.port = my_port;
+
         std::memset(myself.id.bytes, 0, 20);
-        myself.id.bytes[19] = (uint8_t)(my_port & 0xFF);
+        std::memcpy(&myself.id.bytes[16], &my_ip, 4);
 
         for(int i = 0; i < SUCLIST_SIZE; ++i) {
             successor_list[i] = myself;
@@ -32,24 +33,24 @@ public:
         for(int i=0; i<SUCLIST_SIZE; ++i) {
             successor_list[i] = new_suc;
         }
-        std::cout << "[UPDATE] Successor set to " << new_suc.port << " (List Reset)" << std::endl;
+        std::cout << "[UPDATE] Successor set to " << new_suc.id << " (List Reset)" << std::endl;
     }
 
     void invalidatePredecessor() {
         predecessor_valid = false;
         std::memset(predecessor.id.bytes, 0, 20);
-        predecessor.port = 0;
+        predecessor.ip = 0;
     }
 
     void handleSuccessorFailure() {
-        std::cout << "[FAILOVER] Successor " << successor_list[0].port << " unreachable!" << std::endl;
+        std::cout << "[FAILOVER] Successor " << successor_list[0].id << " unreachable!" << std::endl;
 
         for(int i=0; i < SUCLIST_SIZE-1; ++i) {
             successor_list[i] = successor_list[i+1];
         }
         successor_list[SUCLIST_SIZE-1] = myself;
 
-        std::cout << "[FAILOVER] New Successor is " << successor_list[0].port << std::endl;
+        std::cout << "[FAILOVER] New Successor is " << successor_list[0].id << std::endl;
 
         invalidatePredecessor();
     }
@@ -61,7 +62,7 @@ public:
         bool changed = false;
 
         for(int i=0; i < count && i < (SUCLIST_SIZE-1); ++i) {
-            if (successor_list[i+1].port != received_list[i].port) {
+            if (successor_list[i+1].id != received_list[i].id) {
                 successor_list[i+1] = received_list[i];
                 changed = true;
             }
@@ -80,9 +81,9 @@ public:
     void handleStabilizeResponse(const NodeInfo& x) {
         if (in_interval(x.id, myself.id, successor_list[0].id)) {
 
-            if (x.port == successor_list[0].port) return;
+            if (x.id == successor_list[0].id) return;
 
-            std::cout << "[STABILIZE] Found closer successor: " << x.port << std::endl;
+            std::cout << "[STABILIZE] Found closer successor: " << inet_ntoa(*(in_addr*)&x.ip) << std::endl;
             successor_list[0] = x;
         }
     }
@@ -114,6 +115,10 @@ public:
         std::memcpy(my_cert, data, len);
         my_cert_len = len;
         has_cert = true;
+    }
+
+    bool isAlone() const {
+        return successor_list[0].id == myself.id;
     }
 
     bool needsCertificate() const { return !has_cert; }
